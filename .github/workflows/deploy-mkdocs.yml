@@ -1,0 +1,32 @@
+name: Deploy MkDocs Site
+
+on:
+  push:
+    branches:
+      - wits1
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Install MkDocs
+      - name: Install MkDocs
+        run: pip install mkdocs mkdocs-material
+
+      # Deploy site
+      - name: Deploy MkDocs
+        run: mkdocs gh-deploy --force --remote-branch gh-pages
