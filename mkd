@@ -1,0 +1,24 @@
+#!/bin/bash
+# build_project_structure.sh
+# This script creates the directory structure for OpenFOAM and Ansys benchmarking project
+
+# Base directories
+mkdir -p data/raw data/processed
+mkdir -p scripts/setup scripts/benchmarks scripts/power_monitoring scripts/analysis
+mkdir -p benchmarks/openfoam/test_case_1 benchmarks/openfoam/test_case_2
+mkdir -p benchmarks/ansys/test_case_1 benchmarks/ansys/test_case_2
+
+# Touch files to mirror structure
+touch scripts/setup/setup_environment.sh
+
+touch scripts/benchmarks/run_openfoam_benchmarks.sh
+touch scripts/benchmarks/run_ansys_benchmarks.sh
+touch scripts/benchmarks/batch_job_template.slurm
+
+touch scripts/power_monitoring/read_rapl.py
+touch scripts/power_monitoring/log_power_usage.sh
+touch scripts/power_monitoring/analyze_power_data.py
+
+touch scripts/analysis/process_results.py
+touch scripts/analysis/plot_energy_vs_perf.ipynb
+touch scripts/analysis/summary_statistics.py
