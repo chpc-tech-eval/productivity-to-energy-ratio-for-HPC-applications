@@ -10,7 +10,7 @@
 
 - **Team Name:** Debug Thugs
 - **Institution:** Sol Plaatje University
-- **Supervisors:** Charles Crosby, Mmabatho Mahashatsi & Mfundo Mdwadube (CHPC)
+- **Supervisors:** Charles Crosby, Mabatho Hashatsi & Mfundo Mdwadube (CHPC)
 - **Cluster Access:** CHPC Lengau → Private Cluster (10.128.23.188)
 - **Project Code:** DEVL1048
 
