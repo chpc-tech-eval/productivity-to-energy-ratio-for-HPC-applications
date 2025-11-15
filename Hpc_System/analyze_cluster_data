@@ -1,0 +1,92 @@
+#!/bin/bash
+
+OUT="cluster_report_$(hostname)_$(date +%Y%m%d_%H%M%S).txt"
+
+echo "======================================================" | tee -a $OUT
+echo "        CLUSTER SYSTEM INFORMATION REPORT             " | tee -a $OUT
+echo "   Host: $(hostname) | Date: $(date)                  " | tee -a $OUT
+echo "======================================================" | tee -a $OUT
+
+echo -e "\n### 1. BASIC SYSTEM INFO ####################################" | tee -a $OUT
+echo "Hostname: $(hostname)" | tee -a $OUT
+echo "Uptime:" | tee -a $OUT
+uptime | tee -a $OUT
+echo "OS Release:" | tee -a $OUT
+cat /etc/os-release | tee -a $OUT
+
+echo -e "\n### 2. CPU INFORMATION #######################################" | tee -a $OUT
+lscpu | tee -a $OUT
+echo -e "\nCPU Frequency (per core):" | tee -a $OUT
+cat /proc/cpuinfo | grep "MHz" | tee -a $OUT
+
+echo -e "\n### 3. MEMORY INFORMATION ####################################" | tee -a $OUT
+free -h | tee -a $OUT
+echo -e "\nDetailed Memory:" | tee -a $OUT
+dmidecode -t memory | tee -a $OUT
+
+echo -e "\n### 4. GPU / ACCELERATOR INFO ###############################" | tee -a $OUT
+if command -v nvidia-smi &> /dev/null; then
+    nvidia-smi -q | tee -a $OUT
+else
+    echo "No NVIDIA GPU detected or driver not installed." | tee -a $OUT
+fi
+
+echo -e "\n### 5. NETWORK INFORMATION ###################################" | tee -a $OUT
+ip a | tee -a $OUT
+echo -e "\nNetwork Interfaces:" | tee -a $OUT
+lspci | grep -i net | tee -a $OUT
+
+echo -e "\n### 6. STORAGE INFORMATION ###################################" | tee -a $OUT
+lsblk | tee -a $OUT
+df -h | tee -a $OUT
+
+echo -e "\n### 7. POWER INFORMATION #####################################" | tee -a $OUT
+echo "Checking RAPL availability..." | tee -a $OUT
+ls /sys/class/powercap/ | tee -a $OUT
+
+for zone in /sys/class/powercap/intel-rapl:*; do
+    if [ -f "$zone/energy_uj" ]; then
+        echo -e "\nRAPL Zone: $(basename $zone)" | tee -a $OUT
+        cat $zone/name | tee -a $OUT
+        echo "Energy (uJ): $(cat $zone/energy_uj)" | tee -a $OUT
+        echo "Max Power (uW): $(cat $zone/max_power_uw 2>/dev/null)" | tee -a $OUT
+    fi
+done
+
+echo -e "\n### 8. SLURM CONFIGURATION ###################################" | tee -a $OUT
+if command -v sinfo &> /dev/null; then
+    echo "SLURM Nodes:" | tee -a $OUT
+    sinfo -Nel | tee -a $OUT
+
+    echo -e "\nsqueue (current jobs):" | tee -a $OUT
+    squeue | tee -a $OUT
+
+    echo -e "\nSLURM Config:" | tee -a $OUT
+    scontrol show config | tee -a $OUT
+else
+    echo "SLURM not installed on this node." | tee -a $OUT
+fi
+
+echo -e "\n### 9. MODULES & SOFTWARE STACK ##############################" | tee -a $OUT
+if command -v module &> /dev/null; then
+    module avail 2>&1 | tee -a $OUT
+else
+    echo "Environment Modules not installed." | tee -a $OUT
+fi
+
+echo -e "\n### 10. MPI / COMPILER INFORMATION ###########################" | tee -a $OUT
+echo -e "\nAvailable MPI versions:" | tee -a $OUT
+which mpirun | tee -a $OUT
+mpirun --version | tee -a $OUT 2>/dev/null
+
+echo -e "\nCompilers:" | tee -a $OUT
+gcc --version | head -n 1 | tee -a $OUT
+g++ --version | head -n 1 | tee -a $OUT
+gfortran --version | head -n 1 | tee -a $OUT
+
+echo -e "\n### 11. NUMA & TOPOLOGY ##################################### " | tee -a $OUT
+lstopo --output-format txt 2>/dev/null | tee -a $OUT
+
+echo -e "\n\n===== REPORT COMPLETE =====" | tee -a $OUT
+echo "Saved to: $OUT"
+
