@@ -1,0 +1,13 @@
+=== LAMMPS Energy Efficiency Summary ===
+Timestamp: Sat Nov 15 00:07:00 UTC 2025
+Host: smshost
+Nodes: 
+Job name: LAMMPS_Job
+MPI tasks: 16
+Elapsed time (s): 22
+Total energy (J): 1161.43
+Average power (W): 52.79
+Performance (timesteps/s): 1.398
+Performance (M atom-step/s): Performance:
+Efficiency (s/J): 0.018942
+Completion Status: Success

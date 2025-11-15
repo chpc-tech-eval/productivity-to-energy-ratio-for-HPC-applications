@@ -1,0 +1,84 @@
+#!/bin/bash
+# Simple OpenFOAM parallel run script with results folder + power logging
+# Works with SLURM or standalone
+
+# Load OpenFOAM environment (adjust path if needed)
+source /home/charles/OpenFOAM/OpenFOAM-v2412/etc/bashrc
+
+# Set number of MPI tasks if not running under SLURM
+if [ -z "$SLURM_NTASKS" ]; then
+    SLURM_NTASKS=4
+fi
+
+# Power measurement method: ipmi or rapl
+POWER_METHOD="rapl"
+
+# Create timestamped results folder
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+OUTDIR="results/run_$TIMESTAMP"
+mkdir -p "$OUTDIR"
+
+echo "Running OpenFOAM case. Outputs will be in $OUTDIR"
+
+# Copy case files into results folder
+rsync -a --exclude 'processor*' --exclude 'foam.out' --exclude 'decompose.out' ./ "$OUTDIR/"
+
+cd "$OUTDIR" || exit 1
+
+# Create decomposeParDict dynamically
+DECOMP_FILE="system/decomposeParDict"
+mkdir -p system
+cat > $DECOMP_FILE <<EOF
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}
+numberOfSubdomains $SLURM_NTASKS;
+method          scotch;
+EOF
+
+# Decompose mesh for parallel run
+decomposePar -force > decompose.out 2>&1
+
+# -----------------------------
+# Start power logging in background
+# -----------------------------
+if [ "$POWER_METHOD" == "ipmi" ]; then
+    ( while true; do
+        ts=$(date +"%Y-%m-%d %H:%M:%S")
+        p=$(ipmitool dcmi power reading 2>/dev/null | awk '/Instantaneous/ {print $4}')
+        [ -n "$p" ] && echo "$ts,$p" >> "$OUTDIR/power.csv"
+        sleep 1
+    done ) &
+    POW_PID=$!
+elif [ "$POWER_METHOD" == "rapl" ]; then
+    RAPL_FILE="/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
+    ( while true; do
+        ts=$(date +"%Y-%m-%d %H:%M:%S")
+        e=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+        echo "$ts,$e" >> "$OUTDIR/power_rapl.csv"
+        sleep 1
+    done ) &
+    POW_PID=$!
+fi
+
+# -----------------------------
+# Run solver in parallel
+# -----------------------------
+mpirun -np $SLURM_NTASKS simpleFoam -parallel > foam.out 2>&1
+
+# -----------------------------
+# Stop power logging
+# -----------------------------
+kill $POW_PID 2>/dev/null
+wait $POW_PID 2>/dev/null
+
+# Optional: reconstruct results (uncomment if needed)
+# reconstructPar > reconstruct.out
+
+echo "=== OpenFOAM run finished ==="
+echo "Output files are in $OUTDIR (foam.out, decompose.out, power log)"
+

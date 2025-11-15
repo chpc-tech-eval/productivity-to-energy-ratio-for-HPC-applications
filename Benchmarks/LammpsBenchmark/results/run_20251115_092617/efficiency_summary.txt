@@ -1,0 +1,13 @@
+=== LAMMPS Balanced-Powersave Summary ===
+Timestamp: Sat Nov 15 07:26:36 UTC 2025
+Host: smshost
+Node list: smshost
+Job name: LAMMPS_Balanced_Powersave
+MPI tasks: 8
+Elapsed (s): 18
+Total energy (J): 762.97
+Average power (W): 42.39
+LAMMPS Steps: 100
+Timesteps/s: 6.294
+M atom-step/s: 1.611
+Efficiency (s/J): 0.023592

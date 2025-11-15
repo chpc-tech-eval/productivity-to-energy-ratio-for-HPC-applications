@@ -1,0 +1,217 @@
+GNU nano 2.9.8                                                                                                                                                                                                                                                                                                                                                                                                                                                            RunLampswithvizualization1
+
+#!/usr/bin/env bash
+# ============================================================
+# LAMMPS Parallel Benchmark with RAPL Power Logging + Plotting
+# ============================================================
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# --- SLURM / job defaults ---
+SLURM_NTASKS=${SLURM_NTASKS:-16}
+JOB_NAME=${SLURM_JOB_NAME:-LAMMPS_Job}
+NODELIST=$(scontrol show hostnames 2>/dev/null || hostname)
+
+# --- Timestamped output directory ---
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+OUTDIR="$(pwd)/results/run_${TIMESTAMP}"
+mkdir -p "$OUTDIR"
+
+echo "[$(date)] Starting LAMMPS job: $JOB_NAME"
+echo "Output directory: $OUTDIR"
+
+# --- Copy input file ---
+INPUT_FILE="in.lj"
+if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "LAMMPS input file ($INPUT_FILE) not found in $(pwd)"
+    exit 1
+fi
+cp -r "$INPUT_FILE" "$OUTDIR/"
+cd "$OUTDIR" || exit 1
+
+# --- RAPL setup ---
+RAPL_BASE="/sys/class/powercap/intel-rapl"
+RAPL_FILE=""
+MAX_ENERGY_FILE=""
+
+for d in "$RAPL_BASE"/intel-rapl:*; do
+    if [ -f "$d/energy_uj" ]; then
+        RAPL_FILE="$d/energy_uj"
+        [[ -f "$d/max_energy_range_uj" ]] && MAX_ENERGY_FILE="$d/max_energy_range_uj"
+        break
+    fi
+done
+
+[[ -f "$RAPL_FILE" ]] || { echo "RAPL energy file not found. Exiting."; exit 1; }
+
+WRAP_ADD=0
+if [[ -n "$MAX_ENERGY_FILE" ]]; then
+    max_range=$(awk '{print int($1)}' "$MAX_ENERGY_FILE" 2>/dev/null || echo 0)
+    [[ $max_range -gt 0 ]] && WRAP_ADD=$max_range
+fi
+
+TMP_LOG="$(mktemp -u /dev/shm/power_rapl_${TIMESTAMP}XXXXXX.csv 2>/dev/null || mktemp /tmp/power_rapl${TIMESTAMP}_XXXXXX.csv)"
+: > "$TMP_LOG"
+chmod 600 "$TMP_LOG"
+echo "timestamp,energy_uj" > "$TMP_LOG"
+
+POW_PID=""
+
+cleanup() {
+    if [[ -n "${POW_PID:-}" && $(kill -0 "$POW_PID" 2>/dev/null || echo 0) -eq 0 ]]; then
+        kill "$POW_PID" 2>/dev/null || true
+        wait "$POW_PID" 2>/dev/null || true
+    fi
+    [[ -f "$TMP_LOG" ]] && cp -f "$TMP_LOG" "$OUTDIR/power_rapl.csv" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# --- Start power logging loop ---
+(
+    SLEEP_SEC=1
+    while true; do
+        ts=$(date +%s)
+        e=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+        echo "${ts},${e}" >> "$TMP_LOG"
+        sleep "$SLEEP_SEC"
+    done
+) &
+POW_PID=$!
+
+START_E=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+START_T=$(date +%s)
+
+# --- Run LAMMPS ---
+echo "Running LAMMPS on $SLURM_NTASKS MPI tasks..."
+if command -v srun >/dev/null 2>&1 && [ -n "${SLURM_JOB_ID:-}" ]; then
+    srun --mpi=pmix -n "$SLURM_NTASKS" ./lmp_mpi -in "$INPUT_FILE" > lammps.out 2>&1 || true
+elif command -v mpirun >/dev/null 2>&1; then
+    mpirun -np "$SLURM_NTASKS" --bind-to core /home/debugthugz_shared/productivity_to_energy/productivity-to-energy-ratio-for-HPC-applications/benchmarks/Lamps/lammps/bench/lmp_mpi -in "$INPUT_FILE" > lammps.out 2>&1 || true
+else
+    echo "No MPI launcher found. Exiting."
+    exit 1
+fi
+
+END_E=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+END_T=$(date +%s)
+ELAPSED=$((END_T - START_T))
+
+# --- Handle RAPL wrap-around ---
+if [[ "$END_E" -lt "$START_E" && $WRAP_ADD -gt 0 ]]; then
+    END_E=$((END_E + WRAP_ADD))
+fi
+
+ENERGY_J=$(awk -v s="$START_E" -v e="$END_E" 'BEGIN{printf "%.2f", (e - s)/1e6}')
+AVG_POWER=$(awk -v E="$ENERGY_J" -v T="$ELAPSED" 'BEGIN{if(T>0) printf "%.2f", E/T; else print "0.00"}')
+
+# --- Extract performance metrics ---
+STEPS=$(grep -E "Loop time of" lammps.out | awk '{print $(NF-8)}' | head -n1 || echo "0")
+TIMESTEP_RATE=$(grep -E "timesteps/s" lammps.out | awk '{print $(NF-1)}' | head -n1 || echo "0")
+ATOM_RATE=$(grep -E "Matom-step/s" lammps.out | awk '{print $1}' | head -n1 || echo "0")
+
+EFF_S_PER_J=$(awk -v E="$ENERGY_J" -v T="$ELAPSED" 'BEGIN{if(E>0) printf "%.6f", T/E; else print "0"}')
+
+# --- Write summary ---
+{
+    echo "=== LAMMPS Energy Efficiency Summary ==="
+    echo "Timestamp: $(date -u)"
+    echo "Host: $(hostname)"
+    echo "Node list: $NODELIST"
+    echo "Job name: $JOB_NAME"
+    echo "MPI tasks: $SLURM_NTASKS"
+    echo "Elapsed time (s): $ELAPSED"
+    echo "Total energy (J): $ENERGY_J"
+    echo "Average power (W): $AVG_POWER"
+    echo "LAMMPS Steps: $STEPS"
+    echo "Performance (timesteps/s): $TIMESTEP_RATE"
+    echo "Performance (M atom-step/s): $ATOM_RATE"
+    echo "Efficiency (s/J): $EFF_S_PER_J"
+} > "$OUTDIR/efficiency_summary.txt"
+
+echo "=== Run Complete ==="
+echo "Results stored in: $OUTDIR"
+
+# --- Ensure power log exists before plotting ---
+if [ -f "$TMP_LOG" ]; then
+    cp -f "$TMP_LOG" "$OUTDIR/power_rapl.csv"
+else
+    echo "Warning: power log ($TMP_LOG) not found, skipping copy"
+fi
+
+# --- Plot results automatically ---
+PYTHON_ENV="$OUTDIR/pyenv"
+
+if [ ! -d "$PYTHON_ENV" ]; then
+    echo "Creating Python virtual environment for plotting..."
+    python3 -m venv "$PYTHON_ENV" || { echo "Failed to create venv"; exit 1; }
+fi
+
+source "$PYTHON_ENV/bin/activate"
+pip install --upgrade pip --quiet
+pip install pandas matplotlib numpy --quiet || { echo "Failed to install Python packages"; deactivate; exit 1; }
+
+echo "Plotting LAMMPS energy and power trends..."
+python3 - <<'EOF'
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import numpy as np
+
+outdir = os.environ.get("OUTDIR", ".")
+csv_path = os.path.join(outdir, "power_rapl.csv")
+summary_path = os.path.join(outdir, "efficiency_summary.txt")
+plot_path = os.path.join(outdir, "lammps_energy_power_plot.png")
+
+try:
+    df = pd.read_csv(csv_path)
+    df.columns = ['timestamp', 'energy_uj']
+    df['time_s'] = df['timestamp'] - df['timestamp'].iloc[0]
+    df['energy_j'] = df['energy_uj'] / 1e6
+    df['power_w'] = df['energy_j'].diff() / df['time_s'].diff()
+
+    metrics = {}
+    if os.path.exists(summary_path):
+        with open(summary_path, 'r') as f:
+            for line in f:
+                if ':' in line:
+                    key, val = line.strip().split(':', 1)
+                    metrics[key.strip()] = val.strip()
+
+    plt.figure(figsize=(10, 8))
+    plt.subplot(3, 1, 1)
+    plt.plot(df['time_s'], df['energy_j'], '-', color='steelblue')
+    plt.title('LAMMPS Energy Consumption Over Time')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Energy (J)')
+    plt.grid(True, alpha=0.4)
+
+    plt.subplot(3, 1, 2)
+    plt.plot(df['time_s'], df['power_w'], '-', color='darkorange')
+    plt.title('Instantaneous Power Draw')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Power (W)')
+    plt.grid(True, alpha=0.4)
+
+    plt.subplot(3, 1, 3)
+    labels = ['Elapsed Time (s)', 'Energy (J)', 'Avg Power (W)', 'Eff (s/J)']
+    values = [
+        float(metrics.get('Elapsed time (s)', 0)),
+        float(metrics.get('Total energy (J)', 0)),
+        float(metrics.get('Average power (W)', 0)),
+        float(metrics.get('Efficiency (s/J)', 0))
+    ]
+    bars = plt.bar(labels, values, color=['gray', 'royalblue', 'orange', 'green'], alpha=0.8)
+    plt.title('LAMMPS Efficiency Summary')
+    plt.grid(axis='y', alpha=0.3)
+    for bar, val in zip(bars, values):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(plot_path)
+    print(f"✅ Plot saved to: {plot_path}")
+except Exception as e:
+    print(f"Plotting failed: {e}")
+EOF
+deactivate
+echo "=== All tasks completed successfully =

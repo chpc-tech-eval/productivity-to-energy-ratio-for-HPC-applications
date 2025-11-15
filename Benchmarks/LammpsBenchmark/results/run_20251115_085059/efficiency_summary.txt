@@ -1,0 +1,12 @@
+=== LAMMPS Balanced-mode Summary ===
+Timestamp: Sat Nov 15 06:51:20 UTC 2025
+Host: smshost
+Job name: LAMMPS_Balanced
+MPI tasks: 16
+Elapsed time (s): 17.7939
+Total energy (J): 1132.555154
+Average power (W): 63.64850617346393988951
+LAMMPS steps: 100
+Timesteps/s: 5.62
+M atom-step/s: 1.439
+Efficiency (s/J): .01571128782307408933

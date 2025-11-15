@@ -1,0 +1,26 @@
+===========================================
+       LAMMPS Energy Efficiency Summary
+===========================================
+
+Run Information:
+    Timestamp:            Sat Nov 15 06:29:43 UTC 2025
+    Host:                 smshost
+    Node list:            
+    Job name:             LAMMPS_Job
+    Mode:                 baseline
+    MPI tasks:            16
+    OMP threads:          1
+
+Performance:
+    Steps:                100
+    Timesteps/s:          5.416
+    M atom-step/s:        1.387
+
+Energy & Power:
+    Elapsed Time (s):     21.776639
+    Total Energy (J):     1179.2780
+    Average Power (W):    54.153
+    Efficiency (s/J):     0.018466
+
+LAMMPS exit code: 0
+===========================================

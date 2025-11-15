@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# ============================================================
+# LAMMPS Parallel Benchmark with RAPL Power Logging + Plotting
+# ============================================================
+
+set -euo pipefail
+IFS=$'\n\t'
+export TMPDIR=$HOME/tmp
+mkdir -p $TMPDIR
+
+# ---------------- CPU Power Limiting ----------------
+# Set CPU governor to powersave to reduce average power (~40W target)
+echo "[PowerLimit] Setting CPU governor → powersave (~40W target)"
+sudo cpupower frequency-set -g powersave &>/dev/null || true
+
+# --- Script directory & LAMMPS binary (local) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LMP_BIN="$SCRIPT_DIR/lmp_mpi"
+if [[ ! -x "$LMP_BIN" ]]; then
+    echo "LAMMPS MPI binary not found or not executable: $LMP_BIN"
+    exit 1
+fi
+
+# --- Job settings ---
+JOB_NAME=${SLURM_JOB_NAME:-LAMMPS_Job}
+NODELIST=$(scontrol show hostnames 2>/dev/null || hostname)
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+OUTDIR="$SCRIPT_DIR/results/run_${TIMESTAMP}"
+mkdir -p "$OUTDIR"
+
+# --- Mode and timesteps ---
+MODE=${1:-baseline}
+N_TIMESTEPS=${2:-0}   # 0 = keep original in.lj run value
+
+echo "[$(date)] Starting LAMMPS job: $JOB_NAME (mode: $MODE)"
+echo "Output directory: $OUTDIR"
+
+# --- Input file ---
+INPUT_SRC="$SCRIPT_DIR/in.lj"
+if [[ ! -f "$INPUT_SRC" ]]; then
+    echo "LAMMPS input file not found at $INPUT_SRC"
+    exit 1
+fi
+cp "$INPUT_SRC" "$OUTDIR/in.lj"
+cd "$OUTDIR"
+INPUT_FILE="in.lj"
+
+# --- Override timesteps if requested ---
+if [[ "$N_TIMESTEPS" -gt 0 ]]; then
+    if grep -q '^run ' "$INPUT_FILE"; then
+        sed -i "s/^run .*/run $N_TIMESTEPS/" "$INPUT_FILE"
+    else
+        echo "run $N_TIMESTEPS" >> "$INPUT_FILE"
+    fi
+fi
+
+# --- RAPL energy logging setup ---
+RAPL_BASE="/sys/class/powercap/intel-rapl"
+RAPL_FILE=""
+MAX_ENERGY_FILE=""
+for d in "$RAPL_BASE"/intel-rapl:*; do
+    if [[ -f "$d/energy_uj" ]]; then
+        RAPL_FILE="$d/energy_uj"
+        [[ -f "$d/max_energy_range_uj" ]] && MAX_ENERGY_FILE="$d/max_energy_range_uj"
+        break
+    fi
+done
+if [[ -z "$RAPL_FILE" || ! -f "$RAPL_FILE" ]]; then
+    echo "RAPL energy file not found. Exiting."
+    exit 1
+fi
+WRAP_ADD=0
+[[ -n "$MAX_ENERGY_FILE" ]] && WRAP_ADD=$(awk '{print int($1)}' "$MAX_ENERGY_FILE")
+
+TMP_LOG="$(mktemp -u /dev/shm/power_rapl_${TIMESTAMP}XXXXXX.csv 2>/dev/null || mktemp /tmp/power_rapl_${TIMESTAMP}_XXXXXX.csv)"
+: > "$TMP_LOG"
+chmod 600 "$TMP_LOG"
+echo "timestamp,energy_uj" > "$TMP_LOG"
+
+POW_PID=""
+cleanup() {
+    [[ -n "$POW_PID" ]] && kill "$POW_PID" 2>/dev/null || true
+    wait "$POW_PID" 2>/dev/null || true
+    [[ -f "$TMP_LOG" ]] && cp -f "$TMP_LOG" "$OUTDIR/power_rapl.csv"
+}
+trap cleanup EXIT INT TERM
+
+# --- Start RAPL logging (1s sampling) ---
+(
+    while true; do
+        ts=$(date +%s.%N)
+        e=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+        echo "${ts},${e}" >> "$TMP_LOG"
+        sleep 1
+    done
+) &
+POW_PID=$!
+
+# --- Record start energy and time ---
+START_E=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+START_T=$(date +%s.%N)
+
+# --- Mode-specific MPI/OMP setup ---
+unset OMP_NUM_THREADS
+MPI_RANKS=16
+MPI_FLAGS=""
+OMP_FLAGS=""
+case "$MODE" in
+    baseline) MPI_RANKS=16 ; OMP_NUM_THREADS=1 ;;
+    affinity) MPI_RANKS=16; MPI_FLAGS="--bind-to core --map-by socket:PE=1" ;;
+    hybridA) export OMP_NUM_THREADS=2; MPI_RANKS=8; OMP_FLAGS="-pk omp 2" ;;
+    hybridB) export OMP_NUM_THREADS=4; MPI_RANKS=4; OMP_FLAGS="-pk omp 4" ;;
+    fewer_ranks) MPI_RANKS=8 ;;
+    io_reduction) MPI_RANKS=16 ;;
+    *) echo "Unknown mode: $MODE"; exit 1 ;;
+esac
+
+# --- Run LAMMPS ---
+echo "Running LAMMPS: MPI ranks=$MPI_RANKS, OMP threads=${OMP_NUM_THREADS:-1}"
+mpirun -np "$MPI_RANKS" $MPI_FLAGS "$LMP_BIN" $OMP_FLAGS -in "$INPUT_FILE" > lammps.out 2>&1 || true
+LAMMPS_EXIT_CODE=$?
+
+# --- Record end energy and time ---
+END_E=$(cat "$RAPL_FILE" 2>/dev/null || echo 0)
+END_T=$(date +%s.%N)
+[[ -n "$POW_PID" ]] && kill "$POW_PID" 2>/dev/null || true
+wait "$POW_PID" 2>/dev/null || true
+cp -f "$TMP_LOG" "$OUTDIR/power_rapl.csv" || true
+
+# --- Compute metrics ---
+ELAPSED=$(awk -v s="$START_T" -v e="$END_T" 'BEGIN{printf "%.6f", e - s}')
+if [[ "$END_E" -lt "$START_E" && $WRAP_ADD -gt 0 ]]; then
+    END_E=$((END_E + WRAP_ADD))
+fi
+ENERGY_J=$(awk -v s="$START_E" -v e="$END_E" 'BEGIN{printf "%.4f", (e - s)/1e6}')
+AVG_POWER=$(awk -v E="$ENERGY_J" -v T="$ELAPSED" 'BEGIN{if(T>0) printf "%.3f", E/T; else print "0.000"}')
+
+# --- Parse LAMMPS output ---
+STEPS=$(grep -m1 -oP 'for\s+\K[0-9]+(?=\s+steps)' lammps.out || echo "0")
+perf_line=$(grep -m1 "Performance:" lammps.out || true)
+if [[ -n "$perf_line" ]]; then
+    TIMESTEP_RATE=$(echo "$perf_line" | awk -F',' '{print $(NF-1)}' | awk '{print $1}')
+    ATOM_RATE=$(echo "$perf_line" | awk -F',' '{print $NF}' | awk '{print $1}')
+else
+    TIMESTEP_RATE="0"
+    ATOM_RATE="0"
+fi
+TIMESTEP_RATE=$(awk -v v="$TIMESTEP_RATE" 'BEGIN{if(v=="") print "0"; else printf "%.3f", v+0}')
+ATOM_RATE=$(awk -v v="$ATOM_RATE" 'BEGIN{if(v=="") print "0"; else printf "%.3f", v+0}')
+EFF_S_PER_J=$(awk -v E="$ENERGY_J" -v T="$ELAPSED" 'BEGIN{if(E>0) printf "%.6f", T/E; else print "0"}')
+
+# --- Write summary ---
+SUMMARY="$OUTDIR/efficiency_summary.txt"
+cat > "$SUMMARY" <<EOF
+===========================================
+       LAMMPS Energy Efficiency Summary
+===========================================
+
+Run Information:
+    Timestamp:            $(date -u)
+    Host:                 $(hostname)
+    Node list:            $NODELIST
+    Job name:             $JOB_NAME
+    Mode:                 $MODE
+    MPI tasks:            $MPI_RANKS
+    OMP threads:          ${OMP_NUM_THREADS:-1}
+
+Performance:
+    Steps:                $STEPS
+    Timesteps/s:          $TIMESTEP_RATE
+    M atom-step/s:        $ATOM_RATE
+
+Energy & Power:
+    Elapsed Time (s):     $ELAPSED
+    Total Energy (J):     $ENERGY_J
+    Average Power (W):    $AVG_POWER
+    Efficiency (s/J):     $EFF_S_PER_J
+
+LAMMPS exit code: $LAMMPS_EXIT_CODE
+
+
+===========================================
+EOF
+
+echo "[Done] Efficiency summary saved to $SUMMARY"
+
