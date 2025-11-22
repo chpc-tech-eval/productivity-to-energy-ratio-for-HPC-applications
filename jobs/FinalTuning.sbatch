@@ -161,5 +161,4 @@ Iterations/J: $ITER_PER_J
 EOF
 
 echo "=== Run Complete ==="
-echo "Results stored in: $OUTDIR"
-
+echo "Results stored in: $OUTDIR""
