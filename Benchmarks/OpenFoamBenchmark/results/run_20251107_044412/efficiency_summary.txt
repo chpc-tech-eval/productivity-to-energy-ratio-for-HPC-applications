@@ -1,0 +1,13 @@
+=== OpenFOAM Energy Efficiency Summary ===
+Timestamp: Fri Nov  7 03:01:36 UTC 2025
+Host: smshost
+Node list: 
+Job name: OpenFOAM_Job
+MPI tasks: 4
+Solver: simpleFoam
+Elapsed time (s): 1030
+Total energy (J): 62058.36
+Average power (W): 60.25
+Iterations (approx): 250
+Efficiency (s/J): 0.016597
+Iterations/J: 0.004028
