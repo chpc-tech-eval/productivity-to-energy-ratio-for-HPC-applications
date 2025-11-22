@@ -380,7 +380,7 @@ DebugThugs-HPC-Project/
     ├── project_proposal.docx
     ├── interim_report.docx
     ├── final_report.docx
-    └── presentation_slides.pptx
+    └── presentation_slides.pptxx
 ```
 
 ---
