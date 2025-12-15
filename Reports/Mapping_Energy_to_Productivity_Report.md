@@ -681,9 +681,9 @@ Benchmark performance (Timesteps/s) and average power consumption (Watts) were m
 
 | CPU Frequency (GHz) | Timesteps/s | Avg Power (W) | Energy Efficiency (ts/s per W) | Atom Steps/s | Time to Simulation (seconds) |
 | ------------------- | ----------- | ------------- | ------------------------------ | ------------ | ---------------------------- |
-| *Max Turbo (3.5)* | 7,152       | 88.75         | 0.1127                         | 1.83         | *13,9824*                  |
-| *Optimal (2.7)*   | 5,278       | 46.03         | 0.0217                         | 1.33         | *19*                       |
-| *Low (2.0)*       | 6,292       | 39.06         | 0.0256                         | 1.61         | *22,605*                   |
+| *Max Turbo (3.5)* | 7,152       | 88.75         | 0.0806                         | 1.83         | *13,9824*                  |
+| *Optimal (2.7)*   | 5,278       | 46.03         | 0.1145                         | 1.33         | *19*                       |
+| *Low (2.0)*       | 6,292       | 39.06         | 0.1611                         | 1.61         | *22,605*                   |
 
 
 *Table 9:* LAMMPS single-node performance and energy efficiency comparison across different CPU clock speeds. The results correspond to the best performing run at each frequency.
